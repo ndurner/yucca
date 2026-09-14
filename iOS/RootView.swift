@@ -2,6 +2,7 @@ import SwiftUI
 
 struct RootView: View {
     @EnvironmentObject private var session: LuccaWebSession
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         Group {
@@ -29,6 +30,10 @@ struct RootView: View {
                         }
                     }
             }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active, session.isSignedIn else { return }
+            Task { await session.refresh() }
         }
     }
 }
@@ -176,9 +181,14 @@ struct DashboardView: View {
                             Task { await session.toggleClock() }
                         }
                         if session.snapshot.isClockedIn, let start = session.snapshot.activeStart {
-                            Text("Entered at \(start.formatted(date: .omitted, time: .shortened))")
+                            Text("Entered at \(start.formatted(date: .omitted, time: .shortened)) · synced with Lucca")
                                 .font(.subheadline.weight(.medium))
                                 .foregroundStyle(.white.opacity(0.72))
+                                .multilineTextAlignment(.center)
+                        } else if let confirmation = session.confirmationMessage {
+                            Label(confirmation, systemImage: "checkmark.circle.fill")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.green)
                         } else {
                             Text("Ready when you are")
                                 .font(.subheadline.weight(.medium))
@@ -203,6 +213,13 @@ struct DashboardView: View {
                 }
             }
             .refreshable { await session.refresh() }
+            .task {
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(60))
+                    guard !Task.isCancelled else { break }
+                    await session.refresh()
+                }
+            }
             .alert("Couldn’t update Lucca", isPresented: Binding(
                 get: { session.errorMessage != nil },
                 set: { if !$0 { session.errorMessage = nil } }
@@ -246,7 +263,7 @@ private struct TimeCard: View {
             Text(DurationText.compact(seconds))
                 .font(.system(size: 34, weight: .bold, design: .rounded).monospacedDigit())
                 .foregroundStyle(dark ? .white : YuccaTheme.ink)
-            Text("hours")
+            Text("hours : minutes")
                 .font(.caption)
                 .foregroundStyle(dark ? .white.opacity(0.55) : .secondary)
         }

@@ -54,4 +54,20 @@ final class TimesheetMathTests: XCTestCase {
         )
         XCTAssertNil(TimesheetMath.activeEntry(in: [old], today: now, calendar: berlin))
     }
+
+    func testSnapshotDoesNotCountFuturePlannedEntries() throws {
+        let now = try XCTUnwrap(berlin.date(from: DateComponents(
+            year: 2026, month: 9, day: 14, hour: 8
+        )))
+        let future = TimeEntry(
+            id: 4, ownerId: 7, unit: 2,
+            startsAt: "2026-09-15T09:00:00", duration: "08:00:00",
+            endsAt: "2026-09-15T17:00:00", archivedAt: nil, creationSource: 2
+        )
+
+        let snapshot = TimesheetMath.snapshot(entries: [future], now: now, calendar: berlin)
+
+        XCTAssertEqual(snapshot.todaySeconds, 0)
+        XCTAssertEqual(snapshot.weekSeconds, 0)
+    }
 }

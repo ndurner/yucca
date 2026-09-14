@@ -63,7 +63,7 @@ enum TimesheetMath {
         let active = activeEntry(in: entries, today: now, calendar: calendar)
 
         for entry in entries where entry.archivedAt == nil {
-            guard let start = entry.startsAtDate(calendar: calendar) else { continue }
+            guard let start = entry.startsAtDate(calendar: calendar), start <= now else { continue }
             var duration = entry.durationSeconds
             if entry.id == active?.id {
                 duration = max(0, now.timeIntervalSince(start))
@@ -81,4 +81,3 @@ enum TimesheetMath {
         )
     }
 }
-
