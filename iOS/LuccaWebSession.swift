@@ -3,15 +3,50 @@ import OSLog
 import SwiftUI
 import WebKit
 
-struct LuccaServiceError: LocalizedError {
+struct LuccaServiceError: LocalizedError, Sendable {
+    enum Kind: Sendable {
+        case general
+        case authentication
+        case timeout
+    }
+
     let message: String
+    var kind: Kind = .general
     var errorDescription: String? { message }
 }
 
-private struct BridgeResponse: Decodable {
+private struct BridgeResponse: Decodable, Sendable {
     let ok: Bool
     let status: Int
     let body: String
+    let url: String
+    let contentType: String
+}
+
+@MainActor
+private final class BridgeCall {
+    private var continuation: CheckedContinuation<BridgeResponse, Error>?
+    private var timeoutTask: Task<Void, Never>?
+
+    func start(_ continuation: CheckedContinuation<BridgeResponse, Error>) {
+        self.continuation = continuation
+        timeoutTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(30))
+            guard !Task.isCancelled else { return }
+            self?.finish(.failure(LuccaServiceError(
+                message: "Lucca did not respond. Please try again.",
+                kind: .timeout
+            )))
+        }
+    }
+
+    func finish(_ result: Result<BridgeResponse, Error>) {
+        guard let continuation else { return }
+        self.continuation = nil
+        timeoutTask?.cancel()
+        timeoutTask = nil
+        continuation.resume(with: result)
+    }
 }
 
 @MainActor
@@ -37,6 +72,7 @@ final class LuccaWebSession: NSObject, ObservableObject {
     private var pendingEntryID: Int?
     private var pendingBaselineSeconds: TimeInterval?
     private var refreshTask: Task<Void, Never>?
+    private var needsRefresh = false
 
     override init() {
         tenantHost = UserDefaults.standard.string(forKey: "tenantHost") ?? ""
@@ -91,9 +127,13 @@ final class LuccaWebSession: NSObject, ObservableObject {
     }
 
     func refresh() async {
-        guard hasTenant, !isBusy else { return }
+        guard hasTenant else { return }
+        guard !isBusy else {
+            needsRefresh = true
+            return
+        }
         isBusy = true
-        defer { isBusy = false }
+        defer { finishOperation() }
         do {
             let user = try await fetchCurrentUser()
             currentUser = user
@@ -122,7 +162,7 @@ final class LuccaWebSession: NSObject, ObservableObject {
         }
         isBusy = true
         confirmationMessage = nil
-        defer { isBusy = false }
+        defer { finishOperation() }
         do {
             let user: LuccaUser
             if let currentUser { user = currentUser }
@@ -175,8 +215,17 @@ final class LuccaWebSession: NSObject, ObservableObject {
             print("YUCCA_DIAGNOSTIC toggle-succeeded action=\(wasClockedIn ? "leave" : "enter") entries=\(updated.count)")
             #endif
         } catch {
+            if (error as? LuccaServiceError)?.kind == .timeout {
+                // A timed-out write may still have reached Lucca. Refresh before
+                // allowing another tap so that it cannot create a duplicate row.
+                needsRefresh = true
+            }
             handle(error)
         }
+    }
+
+    func sceneDidBecomeActive() {
+        Task { await refresh() }
     }
 
     func signOut() {
@@ -486,28 +535,90 @@ final class LuccaWebSession: NSObject, ObservableObject {
           ?.split('=').slice(1).join('=');
         if (csrf) options.headers['X-XSRF-TOKEN'] = decodeURIComponent(csrf);
         if (body !== null) options.body = body;
-        const response = await fetch(path, options);
-        const text = await response.text();
-        return JSON.stringify({ ok: response.ok, status: response.status, body: text });
+        const controller = new AbortController();
+        options.signal = controller.signal;
+        const timeout = setTimeout(() => controller.abort(), 25000);
+        try {
+          const response = await fetch(path, options);
+          const text = await response.text();
+          return JSON.stringify({
+            ok: response.ok,
+            status: response.status,
+            body: text,
+            url: response.url,
+            contentType: response.headers.get('content-type') || ''
+          });
+        } catch (error) {
+          if (error?.name === 'AbortError') {
+            return JSON.stringify({
+              ok: false,
+              status: 0,
+              body: 'The request timed out.',
+              url: '',
+              contentType: ''
+            });
+          }
+          throw error;
+        } finally {
+          clearTimeout(timeout);
+        }
         """
-        let value = try await webView.callAsyncJavaScript(
-            script,
-            arguments: ["path": path, "method": method, "body": body ?? NSNull()],
-            in: nil,
-            contentWorld: .page
+        let response = try await bridgeResponse(
+            script: script,
+            arguments: ["path": path, "method": method, "body": body ?? NSNull()]
         )
-        guard let encoded = value as? String,
-              let response = try? JSONDecoder().decode(BridgeResponse.self, from: Data(encoded.utf8))
-        else { throw LuccaServiceError(message: "The Lucca page returned an unreadable response.") }
         logger.info("Lucca \(method, privacy: .public) \(path, privacy: .public) returned \(response.status, privacy: .public)")
         #if DEBUG
         print("YUCCA_DIAGNOSTIC request method=\(method) path=\(path) status=\(response.status) ok=\(response.ok)")
         #endif
+        if response.status == 0 {
+            throw LuccaServiceError(message: "Lucca did not respond. Please try again.", kind: .timeout)
+        }
+        let responseHost = URL(string: response.url)?.host
+        if response.status == 401 || response.status == 403 ||
+            (responseHost != nil && responseHost != tenantHost) ||
+            (response.ok && response.contentType.localizedCaseInsensitiveContains("text/html")) {
+            throw LuccaServiceError(
+                message: "Your Lucca session expired. Reconnecting…",
+                kind: .authentication
+            )
+        }
         guard response.ok else {
             let detail = Self.serverMessage(from: response.body)
             throw LuccaServiceError(message: "Lucca returned \(response.status)\(detail.map { ": \($0)" } ?? "").")
         }
         return Data(response.body.utf8)
+    }
+
+    private func bridgeResponse(script: String, arguments: [String: Any]) async throws -> BridgeResponse {
+        let call = BridgeCall()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                call.start(continuation)
+                webView.callAsyncJavaScript(
+                    script,
+                    arguments: arguments,
+                    in: nil,
+                    in: .page
+                ) { result in
+                    call.finish(result.flatMap { value in
+                        guard let encoded = value as? String,
+                              let response = try? JSONDecoder().decode(
+                                BridgeResponse.self,
+                                from: Data(encoded.utf8)
+                              )
+                        else {
+                            return .failure(LuccaServiceError(
+                                message: "The Lucca page returned an unreadable response."
+                            ))
+                        }
+                        return .success(response)
+                    })
+                }
+            }
+        } onCancel: {
+            Task { @MainActor in call.finish(.failure(CancellationError())) }
+        }
     }
 
     private func tenantURL(path: String) -> URL? {
@@ -519,16 +630,27 @@ final class LuccaWebSession: NSObject, ObservableObject {
     }
 
     private func handle(_ error: Error) {
+        guard !(error is CancellationError) else { return }
         let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         logger.error("Lucca refresh failed: \(String(reflecting: error), privacy: .public)")
         #if DEBUG
         print("YUCCA_DIAGNOSTIC refresh-failed \(String(reflecting: error))")
         #endif
         errorMessage = message
-        if message.contains("401") || message.contains("403") || message.contains("signed-in user") {
+        let serviceError = error as? LuccaServiceError
+        if serviceError?.kind == .authentication ||
+            message.contains("401") || message.contains("403") || message.contains("signed-in user") {
             isSignedIn = false
             isShowingLogin = true
+            loadTenantRoot()
         }
+    }
+
+    private func finishOperation() {
+        isBusy = false
+        guard needsRefresh else { return }
+        needsRefresh = false
+        Task { await refresh() }
     }
 
     private static func normalizedHost(_ input: String) throws -> String {
@@ -606,9 +728,12 @@ final class LuccaWebSession: NSObject, ObservableObject {
 
 extension LuccaWebSession: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        guard webView.url?.host == tenantHost,
-              webView.url?.path.contains("/identity/login") != true
-        else { return }
+        guard webView.url?.host == tenantHost else { return }
+        if webView.url?.path.contains("/identity/login") == true {
+            isSignedIn = false
+            isShowingLogin = true
+            return
+        }
         refreshTask?.cancel()
         refreshTask = Task { [weak self] in
             await self?.refresh()

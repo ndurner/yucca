@@ -32,8 +32,8 @@ struct RootView: View {
             }
         }
         .onChange(of: scenePhase) { _, phase in
-            guard phase == .active, session.isSignedIn else { return }
-            Task { await session.refresh() }
+            guard phase == .active, session.hasTenant else { return }
+            session.sceneDidBecomeActive()
         }
     }
 }
