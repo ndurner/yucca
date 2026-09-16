@@ -73,6 +73,7 @@ final class LuccaWebSession: NSObject, ObservableObject {
     private var pendingBaselineSeconds: TimeInterval?
     private var refreshTask: Task<Void, Never>?
     private var needsRefresh = false
+    private var isTenantPageReady = false
 
     override init() {
         tenantHost = UserDefaults.standard.string(forKey: "tenantHost") ?? ""
@@ -118,6 +119,7 @@ final class LuccaWebSession: NSObject, ObservableObject {
 
     func loadTenantRoot() {
         guard let url = tenantURL(path: "/") else { return }
+        isTenantPageReady = false
         webView.load(URLRequest(url: url))
     }
 
@@ -523,6 +525,7 @@ final class LuccaWebSession: NSObject, ObservableObject {
     }
 
     private func request(path: String, method: String = "GET", json: Any? = nil) async throws -> Data {
+        try await waitForTenantPage()
         let body = try json.map { String(data: try JSONSerialization.data(withJSONObject: $0), encoding: .utf8)! }
         let script = """
         const options = {
@@ -563,10 +566,23 @@ final class LuccaWebSession: NSObject, ObservableObject {
           clearTimeout(timeout);
         }
         """
-        let response = try await bridgeResponse(
-            script: script,
-            arguments: ["path": path, "method": method, "body": body ?? NSNull()]
-        )
+        let arguments: [String: Any] = ["path": path, "method": method, "body": body ?? NSNull()]
+        let response: BridgeResponse
+        do {
+            response = try await bridgeResponse(script: script, arguments: arguments)
+        } catch where Self.isRecoverableWebKitError(error) {
+            logger.warning("Lucca's WebKit process was unavailable; reloading the authenticated page")
+            try await reloadTenantPage()
+            guard method == "GET" else {
+                // The script may have submitted a write before WebKit disconnected.
+                // Refresh the server state instead of risking a duplicate request.
+                needsRefresh = true
+                throw LuccaServiceError(
+                    message: "The Lucca connection restarted during the update. Yucca is checking whether the change was saved; please try again after it finishes syncing."
+                )
+            }
+            response = try await bridgeResponse(script: script, arguments: arguments)
+        }
         logger.info("Lucca \(method, privacy: .public) \(path, privacy: .public) returned \(response.status, privacy: .public)")
         #if DEBUG
         print("YUCCA_DIAGNOSTIC request method=\(method) path=\(path) status=\(response.status) ok=\(response.ok)")
@@ -619,6 +635,36 @@ final class LuccaWebSession: NSObject, ObservableObject {
         } onCancel: {
             Task { @MainActor in call.finish(.failure(CancellationError())) }
         }
+    }
+
+    private func waitForTenantPage() async throws {
+        guard hasTenant else {
+            throw LuccaServiceError(message: "Choose a Lucca domain before connecting.")
+        }
+        if isTenantPageReady, webView.url?.host == tenantHost { return }
+        if !webView.isLoading { loadTenantRoot() }
+
+        for _ in 0..<200 {
+            try Task.checkCancellation()
+            if isTenantPageReady, webView.url?.host == tenantHost { return }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        throw LuccaServiceError(
+            message: "Lucca's sign-in page did not finish loading. Check your connection and try again.",
+            kind: .timeout
+        )
+    }
+
+    private func reloadTenantPage() async throws {
+        loadTenantRoot()
+        try await waitForTenantPage()
+    }
+
+    private static func isRecoverableWebKitError(_ error: Error) -> Bool {
+        let error = error as NSError
+        // WKError codes 2...5 cover a terminated content process, an
+        // invalidated web view, and JavaScript execution/result failures.
+        return error.domain == WKError.errorDomain && (2...5).contains(error.code)
     }
 
     private func tenantURL(path: String) -> URL? {
@@ -727,8 +773,13 @@ final class LuccaWebSession: NSObject, ObservableObject {
 }
 
 extension LuccaWebSession: WKNavigationDelegate {
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        isTenantPageReady = false
+    }
+
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         guard webView.url?.host == tenantHost else { return }
+        isTenantPageReady = true
         if webView.url?.path.contains("/identity/login") == true {
             isSignedIn = false
             isShowingLogin = true
@@ -742,7 +793,20 @@ extension LuccaWebSession: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        isTenantPageReady = false
         errorMessage = error.localizedDescription
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        isTenantPageReady = false
+        guard (error as NSError).code != NSURLErrorCancelled else { return }
+        errorMessage = error.localizedDescription
+    }
+
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        logger.warning("Lucca's WebKit content process terminated; reloading it")
+        isTenantPageReady = false
+        loadTenantRoot()
     }
 }
 
