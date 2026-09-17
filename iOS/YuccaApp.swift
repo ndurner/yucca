@@ -8,7 +8,11 @@ struct YuccaApp: App {
         WindowGroup {
             RootView()
                 .environmentObject(session)
+                .onReceive(session.$snapshot) { snapshot in
+                    PhoneWatchBridge.shared.publish(snapshot: snapshot)
+                }
                 .task {
+                    PhoneWatchBridge.shared.lucca = session
                     if session.hasTenant {
                         session.loadTenantRoot()
                     }

@@ -73,6 +73,7 @@ final class LuccaWebSession: NSObject, ObservableObject {
     private var pendingBaselineSeconds: TimeInterval?
     private var refreshTask: Task<Void, Never>?
     private var needsRefresh = false
+    private var idleWaiters: [CheckedContinuation<Void, Never>] = []
     private var isTenantPageReady = false
 
     override init() {
@@ -224,6 +225,15 @@ final class LuccaWebSession: NSObject, ObservableObject {
             }
             handle(error)
         }
+    }
+
+    func toggleClockWhenReady() async {
+        while isBusy {
+            await withCheckedContinuation { continuation in
+                idleWaiters.append(continuation)
+            }
+        }
+        await toggleClock()
     }
 
     func sceneDidBecomeActive() {
@@ -694,6 +704,9 @@ final class LuccaWebSession: NSObject, ObservableObject {
 
     private func finishOperation() {
         isBusy = false
+        let waiters = idleWaiters
+        idleWaiters.removeAll()
+        waiters.forEach { $0.resume() }
         guard needsRefresh else { return }
         needsRefresh = false
         Task { await refresh() }

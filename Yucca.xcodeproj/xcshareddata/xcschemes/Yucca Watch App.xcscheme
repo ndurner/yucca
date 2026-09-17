@@ -46,7 +46,6 @@
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "E00000000000000000000002"
             BuildableName = "Yucca Watch App.app"
-            BlueprintName = "Yucca Watch App"
             ReferencedContainer = "container:Yucca.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>

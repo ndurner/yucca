@@ -36,17 +36,10 @@ The app never offers a date picker or writes an entry whose start is not today.
 
 ## Build
 
-Open `Yucca.xcodeproj`, choose the `Yucca` scheme, select an iPhone or iPad, and
-Run. This scheme is intentionally phone/tablet-only, so Xcode does not need to
-download watchOS device support just to install Yucca on an iPhone.
-
-The watch source remains available through the separate `Yucca Watch App` scheme.
-Once Xcode's watchOS support is installed, add that target back to the iOS target's
-**Embed Watch Content** phase and add `PhoneWatchBridge.swift` back to the Yucca
-target to ship both apps in one bundle.
-
-The default identifiers are placeholders under `com.example.yucca`; set your own
-development team and bundle identifiers before installing on physical devices.
+Open `Yucca.xcodeproj`, choose the `Yucca` scheme, select a paired iPhone and
+Apple Watch, and Run. The iOS target embeds `Yucca Watch App`, which is also
+available as a separate scheme for watch-only development. Install the matching
+watchOS platform support in Xcode before building the combined scheme.
 
 ## Live verification
 

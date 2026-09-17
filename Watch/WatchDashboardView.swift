@@ -17,7 +17,7 @@ struct WatchDashboardView: View {
                 Button(action: session.toggle) {
                     ZStack {
                         Capsule()
-                            .fill(session.snapshot.isClockedIn ? Color(red: 0.95, green: 0.42, blue: 0.36) : Color(red: 0.30, green: 0.76, blue: 0.56))
+                            .fill(session.snapshot.isClockedIn ? leaveGradient : enterGradient)
                         if session.isBusy {
                             ProgressView().tint(.white)
                         } else {
@@ -33,9 +33,15 @@ struct WatchDashboardView: View {
                 .buttonStyle(.plain)
                 .frame(height: 52)
                 .disabled(session.isBusy)
-                Text(session.snapshot.isClockedIn ? "You’re clocked in" : "Ready when you are")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                if session.isBusy {
+                    Text("Syncing with Lucca…")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                } else if session.snapshot.isClockedIn {
+                    Text("You’re clocked in")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
             }
             .padding(.horizontal, 4)
             .alert("Yucca", isPresented: Binding(
@@ -57,5 +63,27 @@ struct WatchDashboardView: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(title), \(DurationText.spoken(seconds))")
+    }
+
+    private var enterGradient: LinearGradient {
+        LinearGradient(
+            colors: [
+                Color(red: 1.00, green: 0.88, blue: 0.30),
+                Color(red: 0.96, green: 0.60, blue: 0.08)
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
+
+    private var leaveGradient: LinearGradient {
+        LinearGradient(
+            colors: [
+                Color(red: 1.00, green: 0.42, blue: 0.38),
+                Color(red: 0.78, green: 0.10, blue: 0.14)
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
     }
 }

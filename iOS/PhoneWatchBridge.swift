@@ -1,10 +1,27 @@
 import Foundation
 @preconcurrency import WatchConnectivity
 
+private final class WatchReply: @unchecked Sendable {
+    private let handler: ([String: Any]) -> Void
+
+    init(_ handler: @escaping ([String: Any]) -> Void) {
+        self.handler = handler
+    }
+
+    func send(error: String) {
+        handler(["error": error])
+    }
+
+    func send(snapshot: Data) {
+        handler(["snapshot": snapshot])
+    }
+}
+
 @MainActor
-final class PhoneWatchBridge: NSObject, @preconcurrency WCSessionDelegate {
+final class PhoneWatchBridge: NSObject, WCSessionDelegate {
     static let shared = PhoneWatchBridge()
     weak var lucca: LuccaWebSession?
+    private var latestSnapshotData: Data?
 
     private override init() {
         super.init()
@@ -18,32 +35,51 @@ final class PhoneWatchBridge: NSObject, @preconcurrency WCSessionDelegate {
         guard WCSession.isSupported(),
               let data = try? JSONEncoder().encode(snapshot)
         else { return }
-        try? WCSession.default.updateApplicationContext(["snapshot": data])
+        latestSnapshotData = data
+        publishLatestSnapshotIfActivated()
     }
 
-    func session(
+    private func publishLatestSnapshotIfActivated() {
+        guard WCSession.default.activationState == .activated,
+              let latestSnapshotData
+        else { return }
+        try? WCSession.default.updateApplicationContext(["snapshot": latestSnapshotData])
+    }
+
+    nonisolated func session(
         _ session: WCSession,
         activationDidCompleteWith activationState: WCSessionActivationState,
         error: Error?
-    ) { }
+    ) {
+        guard activationState == .activated else { return }
+        Task { @MainActor [weak self] in
+            self?.publishLatestSnapshotIfActivated()
+        }
+    }
 
-    func sessionDidBecomeInactive(_ session: WCSession) { }
-    func sessionDidDeactivate(_ session: WCSession) { session.activate() }
+    nonisolated func sessionDidBecomeInactive(_ session: WCSession) { }
+    nonisolated func sessionDidDeactivate(_ session: WCSession) { session.activate() }
 
-    func session(
+    nonisolated func session(
         _ session: WCSession,
         didReceiveMessage message: [String: Any],
         replyHandler: @escaping ([String: Any]) -> Void
     ) {
-        guard message["command"] as? String == "toggle", let lucca else {
+        guard message["command"] as? String == "toggle" else {
             replyHandler(["error": "Open Yucca on the iPhone to sign in."])
             return
         }
-        Task {
-            await lucca.toggleClock()
-            if let error = lucca.errorMessage { replyHandler(["error": error]) }
-            else if let data = try? JSONEncoder().encode(lucca.snapshot) { replyHandler(["snapshot": data]) }
-            else { replyHandler(["error": "Could not update the watch."]) }
+
+        let reply = WatchReply(replyHandler)
+        Task { @MainActor [weak self] in
+            guard let lucca = self?.lucca else {
+                reply.send(error: "Open Yucca on the iPhone to sign in.")
+                return
+            }
+            await lucca.toggleClockWhenReady()
+            if let error = lucca.errorMessage { reply.send(error: error) }
+            else if let data = try? JSONEncoder().encode(lucca.snapshot) { reply.send(snapshot: data) }
+            else { reply.send(error: "Could not update the watch.") }
         }
     }
 }
