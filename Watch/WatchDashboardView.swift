@@ -16,23 +16,25 @@ struct WatchDashboardView: View {
                 }
                 Button(action: session.toggle) {
                     ZStack {
-                        Capsule()
+                        Circle()
                             .fill(session.snapshot.isClockedIn ? leaveGradient : enterGradient)
                         if session.isBusy {
                             ProgressView().tint(.white)
                         } else {
-                            Label(
-                                session.snapshot.isClockedIn ? "Leave" : "Enter",
-                                systemImage: session.snapshot.isClockedIn ? "arrow.down.right" : "arrow.up.right"
-                            )
+                            VStack(spacing: 6) {
+                                Image(systemName: session.snapshot.isClockedIn ? "arrow.down.right" : "arrow.up.right")
+                                Text(session.snapshot.isClockedIn ? "Leave" : "Enter")
+                            }
                             .font(.headline)
                             .foregroundStyle(.white)
                         }
                     }
+                    .frame(width: 130, height: 130)
+                    .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
-                .frame(height: 52)
                 .disabled(session.isBusy)
+                .accessibilityLabel(session.snapshot.isClockedIn ? "Leave work" : "Enter work")
                 if session.isBusy {
                     Text("Syncing with Lucca…")
                         .font(.caption2)

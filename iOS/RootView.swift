@@ -189,10 +189,6 @@ struct DashboardView: View {
                             Label(confirmation, systemImage: "checkmark.circle.fill")
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(.green)
-                        } else {
-                            Text("Ready when you are")
-                                .font(.subheadline.weight(.medium))
-                                .foregroundStyle(.secondary)
                         }
                         Spacer()
                     }
