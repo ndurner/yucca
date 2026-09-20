@@ -21,17 +21,10 @@ totals for today and this week, without navigating the full web interface.
     <th>iPhone · clocked in</th>
   </tr>
   <tr>
-    <td align="center"><img src="docs/images/watch.png" width="230" alt="Yucca on Apple Watch showing today's and this week's hours and an Enter button"></td>
+    <td align="center"><img src="docs/images/watch-photo.jpg" width="420" alt="App screenshot on Watch. Retouched with AI to remove reflection."></td>
     <td align="center"><img src="docs/images/iphone.png" width="270" alt="Yucca on iPhone showing today's and this week's hours and a Leave button"></td>
   </tr>
 </table>
-
-<details>
-<summary>On a real Apple Watch</summary>
-
-<img src="docs/images/watch-photo.jpg" width="420" alt="App screenshot on Watch. Retouched with AI to remove reflection.">
-
-</details>
 
 ## What it does
 
