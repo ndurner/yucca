@@ -1,6 +1,10 @@
-# Yucca
+<p align="center">
+  <img src="iOS/Assets.xcassets/AppIcon.appiconset/AppIcon-180.png" width="90" height="90" alt="Yucca app icon">
+</p>
 
-**Clock in, clock out, and see your working hours on iPhone and Apple Watch.**
+<h1 align="center">Yucca</h1>
+
+<p align="center"><strong>Clock in, clock out, and see your working hours on iPhone and Apple Watch.</strong></p>
 
 Yucca is a small, independent SwiftUI app for people who use **Lucca Timesheet**
 at work. Add an arrival or departure to today's attendance sheet and check your
